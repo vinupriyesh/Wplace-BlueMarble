@@ -362,7 +362,7 @@ export default class TemplateManager {
                   const pb = tilePixels[tileIdx + 2];
                   const pa = tilePixels[tileIdx + 3];
 
-                  const key = activeTemplate.allowedColorsSet.has(`${pr},${pg},${pb}`) ? `${pr},${pg},${pb}` : 'other';
+                  const key = activeTemplate.allowedColorsSet.has(`${pr},${pg},${pb}`) ? `${pr},${pg},${pb}` : activeTemplate.findClosestColor(pr, pg, pb);
 
                   const isSiteColor = activeTemplate?.allowedColorsSet ? activeTemplate.allowedColorsSet.has(key) : false;
                   
@@ -456,18 +456,11 @@ export default class TemplateManager {
 
               if (a < 1) { continue; }
 
-              let key = activeTemplate.allowedColorsSet.has(`${r},${g},${b}`) ? `${r},${g},${b}` : 'other';
+              let key = activeTemplate.allowedColorsSet.has(`${r},${g},${b}`) ? `${r},${g},${b}` : activeTemplate.findClosestColor(r, g, b);
 
-              // Hide if color is not in allowed palette or explicitly disabled
-              const inWplacePalette = activeTemplate?.allowedColorsSet ? activeTemplate.allowedColorsSet.has(key) : true;
-
-              // if (inWplacePalette) {
-              //   key = 'other'; // Map all non-palette colors to "other"
-              //   console.log('Added color to other');
-              // }
-
+              // Hide if color is explicitly disabled in palette
               const isPaletteColorEnabled = palette?.[key]?.enabled !== false;
-              if (!inWplacePalette || !isPaletteColorEnabled) {
+              if (!isPaletteColorEnabled) {
                 data[idx + 3] = 0; // hide disabled color center pixel
               }
             }
@@ -605,7 +598,13 @@ export default class TemplateManager {
                     if (a < 64) { continue; }
                     if (r === 222 && g === 250 && b === 206) { continue; }
                     requiredPixelCount++;
-                    const key = activeTemplate.allowedColorsSet.has(`${r},${g},${b}`) ? `${r},${g},${b}` : 'other';
+                    // Use same logic as createTemplateTiles to determine key
+                    let key;
+                    if (template.allowedColorsSet?.has(`${r},${g},${b}`)) {
+                      key = `${r},${g},${b}`;
+                    } else {
+                      key = template.findClosestColor(r, g, b);
+                    }
                     paletteMap.set(key, (paletteMap.get(key) || 0) + 1);
                   }
                 }
@@ -639,6 +638,23 @@ export default class TemplateManager {
                   template.colorPalette[rgb] = { count: meta?.count || 0, enabled: !!meta?.enabled };
                 } else {
                   template.colorPalette[rgb].enabled = !!meta?.enabled;
+                }
+                // Rebuild rgbToMeta mapping for asterisk colors
+                if (rgb.endsWith('*')) {
+                  const originalColorName = rgb.slice(0, -1);
+                  let foundRgb = null;
+                  for (const [key, tmeta] of template.rgbToMeta.entries()) {
+                    if (tmeta.name === originalColorName) {
+                      foundRgb = key;
+                      break;
+                    }
+                  }
+                  if (foundRgb && !template.rgbToMeta.has(rgb)) {
+                    const originalMeta = template.rgbToMeta.get(foundRgb);
+                    if (originalMeta) {
+                      template.rgbToMeta.set(rgb, { ...originalMeta, name: rgb });
+                    }
+                  }
                 }
               }
             }

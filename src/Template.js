@@ -44,6 +44,8 @@ export default class Template {
     this.colorPalette = {}; // key: "r,g,b" -> { count: number, enabled: boolean }
     this.tilePrefixes = new Set(); // Set of "xxxx,yyyy" tiles this template touches
     this.storageKey = null; // Key used inside templatesJSON to persist settings
+    this.closestColorCache = new Map(); // Cache for closest color matches
+    this.maxCacheSize = 1000; // Limit cache size to prevent memory leaks
 
     // Build allowed color set from site palette (exclude special Transparent entry by name)
     // Creates a Set of Wplace palette colors excluding "transparent"
@@ -84,24 +86,75 @@ export default class Template {
     console.log('Allowed colors for template:', this.allowedColorsSet);
   }
 
+  /** Finds the closest color in the palette using RGB distance
+   * @param {number} r - Red component (0-255)
+   * @param {number} g - Green component (0-255)
+   * @param {number} b - Blue component (0-255)
+   * @returns {string} Closest color key with asterisk suffix
+   */
+  findClosestColor(r, g, b) {
+    const cacheKey = `${r},${g},${b}`;
+    if (this.closestColorCache.has(cacheKey)) {
+      return this.closestColorCache.get(cacheKey);
+    }
+
+    let minDistance = Infinity;
+    let closestColor = null;
+    let closestName = 'Other';
+
+    const allowed = Array.isArray(colorpalette) ? colorpalette : [];
+    for (const color of allowed) {
+      if (!Array.isArray(color?.rgb) || (color?.name || '').toLowerCase() === 'transparent') continue;
+
+      const [cr, cg, cb] = color.rgb;
+      const distance = Math.sqrt((r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2);
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestColor = `${cr},${cg},${cb}`;
+        closestName = color.name;
+        if (distance === 0) break; // Exact match found, no need to continue
+      }
+    }
+
+    const result = `${closestName}*`;
+    
+    // Implement cache size limit to prevent memory leaks
+    if (this.closestColorCache.size >= this.maxCacheSize) {
+      const firstKey = this.closestColorCache.keys().next().value;
+      this.closestColorCache.delete(firstKey);
+    }
+    this.closestColorCache.set(cacheKey, result);
+
+    // Add to rgbToMeta for UI consistency
+    if (closestColor && !this.rgbToMeta.has(result)) {
+      const originalMeta = this.rgbToMeta.get(closestColor);
+      if (originalMeta) {
+        this.rgbToMeta.set(result, { ...originalMeta, name: result });
+      }
+    }
+
+    return result;
+  }
+
   /** Creates chunks of the template for each tile.
-   * 
+   *
    * @returns {Object} Collection of template bitmaps & buffers organized by tile coordinates
    * @since 0.65.4
    */
   async createTemplateTiles() {
-    console.log('Template coordinates:', this.coords);
+    console.log('Template coordinates 123:', this.coords);
 
     const shreadSize = 3; // Scale image factor for pixel art enhancement (must be odd)
     const bitmap = await createImageBitmap(this.file); // Create efficient bitmap from uploaded file
     const imageWidth = bitmap.width;
     const imageHeight = bitmap.height;
-    
+
     // Calculate total pixel count using standard width × height formula
     // TODO: Use non-transparent pixels instead of basic width times height
     const totalPixels = imageWidth * imageHeight;
     console.log(`Template pixel analysis - Dimensions: ${imageWidth}×${imageHeight} = ${totalPixels.toLocaleString()} pixels`);
-    
+
     // Store pixel count in instance property for access by template manager and UI components
     this.pixelCount = totalPixels;
 
@@ -127,8 +180,13 @@ export default class Template {
           const a = inspectData[idx + 3];
           if (a === 0) { continue; } // Ignored transparent pixel
           if (r === 222 && g === 250 && b === 206) { deface++; }
-          const key = this.allowedColorsSet.has(`${r},${g},${b}`) ? `${r},${g},${b}` : 'other';
-          //if (!this.allowedColorsSet.has(key)) { continue; } // Skip non-palette colors (but #deface added to allowed)
+          let key;
+          if (this.allowedColorsSet.has(`${r},${g},${b}`)) {
+            key = `${r},${g},${b}`;
+          } else {
+            key = this.findClosestColor(r, g, b);
+            console.log(`color not found: ${r},${g},${b}, using closest: ${key}`);
+          }
           required++;
           paletteMap.set(key, (paletteMap.get(key) || 0) + 1);
         }
@@ -264,7 +322,7 @@ export default class Template {
         templateTiles[templateTileName] = await createImageBitmap(canvas); // Creates the bitmap
         // Record tile prefix for fast lookup later
         this.tilePrefixes.add(templateTileName.split(',').slice(0,2).join(','));
-        
+
         const canvasBlob = await canvas.convertToBlob();
         const canvasBuffer = await canvasBlob.arrayBuffer();
         const canvasBufferBytes = Array.from(new Uint8Array(canvasBuffer));
